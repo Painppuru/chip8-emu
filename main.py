@@ -63,6 +63,8 @@ class Chip8(object):
         self.load_fonts()
         self.speed = 1024
         self.delay_sound_timer = pygame.USEREVENT + 1
+        self.started = False
+        self.reseting = False
 
     def load_rom(self, rom_path):
         with open(rom_path, "rb") as rom:
@@ -71,27 +73,34 @@ class Chip8(object):
                 self.memory[0x200 + i] = data[i]
 
     def reset(self):
-        self.memory = [0] * 4096
         self.V = [0] * 16
         self.I = 0
         self.pc = 0x200
         self.stack = []
         self.opcode = 0
-        self.key = [0] * 16
         self.delay_timer = 0
         self.sound_timer = 0
         self.speed = 1024
+        self.reseting = False
 
+        self.screen.clear()
         self.screen.destroy()
         self.start_game()
 
     def start_game(self):
         self.screen.start()
         pygame.time.set_timer(self.delay_sound_timer, round((1 / 60) * 1000))
-        while True:
+        self.started = True
+        while self.started:
             self.listen()
             self.execute_opcode()
             pygame.time.delay(round((1 / self.speed) * 1000))
+
+        if self.reseting:
+            self.reset()
+        elif not self.reseting and not self.started:
+            self.screen.destroy()
+            exit(0)
 
     def load_fonts(self):
         fonts = [
@@ -178,7 +187,11 @@ class Chip8(object):
                     self.key[0xF] = 1
 
                 elif event.key == pygame.K_F1:
-                    self.reset()
+                    self.started = False
+                    self.reseting = True
+
+                elif event.key == pygame.K_F2:
+                    self.started = False
 
             elif event.type == pygame.KEYUP:
                 if event.key == pygame.K_1:
