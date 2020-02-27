@@ -11,6 +11,7 @@ class Screen(object):
         self.height = 32
         self.scaling = 10
         self.clear()
+        self.music()
 
     def clear(self):
         self.display = [[0] * self.width for y in range(self.height)]
@@ -41,6 +42,11 @@ class Screen(object):
         self.scaling = min(xscale, yscale)
         self.start()
 
+    def music(self):
+        pygame.mixer.init()
+        pygame.mixer.music.load("music.mp3")
+        pygame.mixer.music.play(-1)
+
 
 class Chip8(object):
     def __init__(self):
@@ -56,6 +62,7 @@ class Chip8(object):
         self.screen = Screen()
         self.load_fonts()
         self.speed = 1024
+        self.delay_sound_timer = pygame.USEREVENT + 1
 
     def load_rom(self, rom_path):
         with open(rom_path, "rb") as rom:
@@ -63,14 +70,28 @@ class Chip8(object):
             for i in range(len(data)):
                 self.memory[0x200 + i] = data[i]
 
+    def reset(self):
+        self.memory = [0] * 4096
+        self.V = [0] * 16
+        self.I = 0
+        self.pc = 0x200
+        self.stack = []
+        self.opcode = 0
+        self.key = [0] * 16
+        self.delay_timer = 0
+        self.sound_timer = 0
+        self.speed = 1024
+
+        self.screen.destroy()
+        self.start_game()
+
     def start_game(self):
         self.screen.start()
-
+        pygame.time.set_timer(self.delay_sound_timer, round((1 / 60) * 1000))
         while True:
             self.listen()
             self.execute_opcode()
-            self.screen.refresh()
-            # pygame.time.delay(round((1 / self.speed) * 1000))
+            pygame.time.delay(round((1 / self.speed) * 1000))
 
     def load_fonts(self):
         fonts = [
@@ -104,11 +125,14 @@ class Chip8(object):
             elif event.type == pygame.VIDEORESIZE:
                 self.screen.resize(event.w, event.h)
 
+            elif event.type == self.delay_sound_timer:
+                self.timeout_60Hz()
+
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_1:
                     self.key[0x1] = 1
 
-                elif event.key == pygame.K_2:
+                elif event.key == pygame.K_DOWN:
                     self.key[0x2] = 1
 
                 elif event.key == pygame.K_3:
@@ -117,13 +141,13 @@ class Chip8(object):
                 elif event.key == pygame.K_4:
                     self.key[0xC] = 1
 
-                elif event.key == pygame.K_q:
+                elif event.key == pygame.K_LEFT:
                     self.key[0x4] = 1
 
                 elif event.key == pygame.K_w:
                     self.key[0x5] = 1
 
-                elif event.key == pygame.K_e:
+                elif event.key == pygame.K_RIGHT:
                     self.key[0x6] = 1
 
                 elif event.key == pygame.K_r:
@@ -132,7 +156,7 @@ class Chip8(object):
                 elif event.key == pygame.K_a:
                     self.key[0x7] = 1
 
-                elif event.key == pygame.K_s:
+                elif event.key == pygame.K_UP:
                     self.key[0x8] = 1
 
                 elif event.key == pygame.K_d:
@@ -153,11 +177,14 @@ class Chip8(object):
                 elif event.key == pygame.K_v:
                     self.key[0xF] = 1
 
+                elif event.key == pygame.K_F1:
+                    self.reset()
+
             elif event.type == pygame.KEYUP:
                 if event.key == pygame.K_1:
                     self.key[0x1] = 0
 
-                elif event.key == pygame.K_2:
+                elif event.key == pygame.K_DOWN:
                     self.key[0x2] = 0
 
                 elif event.key == pygame.K_3:
@@ -166,13 +193,13 @@ class Chip8(object):
                 elif event.key == pygame.K_4:
                     self.key[0xC] = 0
 
-                elif event.key == pygame.K_q:
+                elif event.key == pygame.K_LEFT:
                     self.key[0x4] = 0
 
                 elif event.key == pygame.K_w:
                     self.key[0x5] = 0
 
-                elif event.key == pygame.K_e:
+                elif event.key == pygame.K_RIGHT:
                     self.key[0x6] = 0
 
                 elif event.key == pygame.K_r:
@@ -181,7 +208,7 @@ class Chip8(object):
                 elif event.key == pygame.K_a:
                     self.key[0x7] = 0
 
-                elif event.key == pygame.K_s:
+                elif event.key == pygame.K_UP:
                     self.key[0x8] = 0
 
                 elif event.key == pygame.K_d:
@@ -209,10 +236,7 @@ class Chip8(object):
         self.opcode = self.get_opcode()
 
         result = (self.opcode & 0xF000)
-        print(f'[PC:0x{self.pc:04x}] Instruction: 0x{self.opcode:04x}')
-
-        if self.delay_timer > 0:
-            self.delay_timer -= 1
+        #print(f'[PC:0x{self.pc:04x}] Instruction: 0x{self.opcode:04x}')
 
         if result == 0x0000:
             second = (self.opcode & 0x00F0)
@@ -241,52 +265,39 @@ class Chip8(object):
                 elif last == 0x000F:  # enable extended screen mode (128 x 64)
                     pass
 
-            self.pc += 2
-
         elif result == 0x1000:  # jump to address NNN
-            self.pc = (self.opcode & 0x0FFF)
+            self.pc = (self.opcode & 0x0FFF) - 2
 
         elif result == 0x2000:  # jump to subroutine at address NNN
             self.stack.append(self.pc)
-            self.pc = (self.opcode & 0x0FFF)
+            self.pc = (self.opcode & 0x0FFF) - 2
 
         elif result == 0x3000:  # skip next istruction if register VX == constant RR
             x = self.V[((self.opcode & 0x0F00) >> 8)]
             r = (self.opcode & 0x00FF)
             if x == r:
-                self.pc += 4
-
-            else:
                 self.pc += 2
 
         elif result == 0x4000:  # skip next intruction if register VX != constant RR
             x = self.V[((self.opcode & 0x0F00) >> 8)]
             r = (self.opcode & 0x00FF)
             if x != r:
-                self.pc += 4
-
-            else:
                 self.pc += 2
 
         elif result == 0x5000:  # skip next instruction if register VX == register VY
             x = self.V[((self.opcode & 0x0F00) >> 8)]
             y = self.V[((self.opcode & 0x00F0) >> 4)]
             if x == y:
-                self.pc += 4
-
-            else:
                 self.pc += 2
 
         elif result == 0x6000:  # move constant RR to register VX
             r = (self.opcode & 0x00FF)
             self.V[((self.opcode & 0x0F00) >> 8)] = r
-            self.pc += 2
 
         elif result == 0x7000:  # add constant RR to register VX
             x = self.V[(self.opcode & 0x0F00) >> 8]
             r = (self.opcode & 0x00FF)
             self.V[((self.opcode & 0x0F00) >> 8)] = (x + r) & 0xFF
-            self.pc += 2
 
         elif result == 0x8000:
             last = (self.opcode & 0x000F)
@@ -337,34 +348,28 @@ class Chip8(object):
                 self.V[0xF] = (self.V[x] & 0x80) >> 7
                 self.V[((self.opcode & 0x0F00) >> 8)] =(self.V[((self.opcode & 0x0F00) >> 8)] << 1) & 0xFF
 
-            self.pc += 2
 
         elif result == 0x9000:  # skip next instruction if register VX != register VY
             x = self.V[((self.opcode & 0x0F00) >> 8)]
             y = self.V[((self.opcode & 0x00F0) >> 4)]
             if x != y:
-                self.pc += 4
-
-            else:
                 self.pc += 2
+
 
         elif result == 0xA000:  # Load index register (I) with constant NNN
             n = self.opcode & 0x0FFF
             self.I = n
-            self.pc += 2
 
         elif result == 0xB000:  # Jump to address NNN + register V0
             n = self.opcode & 0x0FFF
-            self.pc = (n + self.V[0]) & 0xFFFF
+            self.pc = ((n + self.V[0]) & 0xFFFF) - 2
 
         elif result == 0xC000:  # register VX = random number AND KK
             k = (self.opcode & 0x00FF)
             self.V[((self.opcode & 0x0F00) >> 8)] = random.randint(0x00, 0xFF) & k
-            self.pc += 2
 
         elif result == 0xD000:
             self.dxyn()
-            self.pc += 2
 
         elif result == 0xE000:
             k = (self.opcode & 0x0F00) >> 8
@@ -377,7 +382,6 @@ class Chip8(object):
                 if self.key[self.V[k]] == 0:
                     self.pc += 2
 
-            self.pc += 2
 
         elif result == 0xF000:
             r = (self.opcode & 0x0F00) >> 8
@@ -430,7 +434,7 @@ class Chip8(object):
 
                 self.I += r + 1
 
-            self.pc += 2
+        self.pc += 2
 
     def dxyn(self):
         x = (self.opcode & 0x0F00) >> 8
@@ -450,8 +454,17 @@ class Chip8(object):
                 if self.screen.display[current_y][current_x] == 0 and bit == 1:
                     self.V[0xF] = 1
 
+    def timeout_60Hz(self):
+        if self.delay_timer > 0:
+            self.delay_timer -= 1
+
+        if self.sound_timer > 0:
+            self.sound_timer -= 1
+
+        self.screen.refresh()
+
 
 if __name__ == '__main__':
     chip8 = Chip8()
-    chip8.load_rom('tetris.rom')
+    chip8.load_rom('tank.rom')
     chip8.start_game()
